@@ -16,7 +16,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ping Supabase REST API (Hybrid Mode)
+      - name: Ping Supabase REST API (Dynamic Hybrid Mode)
+        env:
+          SECRETS_JSON: ${{ toJson(secrets) }}
         run: |
           # Định nghĩa hàm ping lai (hybrid)
           ping_supabase() {
@@ -24,12 +26,12 @@ jobs:
             local key="$2"
             local name="$3"
             
-            if [ -z "$url" ] || [ -z "$key" ]; then
+            if [ -z "$url" ] || [ "$url" = "null" ] || [ -z "$key" ] || [ "$key" = "null" ]; then
               echo "Bỏ qua $name do chưa cấu hình URL hoặc Key."
               return 0
             fi
             
-            echo "Đang kiểm tra $name..."
+            echo "Đang kiểm tra dự án: $name..."
             
             # Cách 1: Truy vấn bảng profiles
             local status
@@ -51,12 +53,33 @@ jobs:
               echo "  [OK] Cách 2 hoàn thành với HTTP $status"
             fi
           }
+
+          # Tự động quét tất cả các dự án cấu hình trong Secrets
+          echo "Đang quét cấu hình các dự án..."
           
-          # Thực thi ping cho Dự án 1
-          ping_supabase "${{ secrets.PROJECT_1_URL }}" "${{ secrets.PROJECT_1_ANON_KEY }}" "Dự án 1 (Seller App)"
+          # Đọc danh sách key kết thúc bằng _URL
+          url_keys=$(echo "$SECRETS_JSON" | jq -r 'keys[] | select(endswith("_URL"))')
           
-          # Bạn có thể nhân bản dòng dưới đây cho các dự án tiếp theo nếu cần:
-          # ping_supabase "${{ secrets.PROJECT_2_URL }}" "${{ secrets.PROJECT_2_ANON_KEY }}" "Dự án 2"
+          if [ -z "$url_keys" ]; then
+            echo "Không tìm thấy dự án nào kết thúc bằng _URL trong Secrets."
+            exit 0
+          fi
+          
+          for url_key in $url_keys; do
+            prefix="${url_key%_URL}"
+            url=$(echo "$SECRETS_JSON" | jq -r --arg k "$url_key" '.[$k]')
+            
+            # Tìm key tương ứng (chấp nhận cả _ANON_KEY hoặc _PUBLISHABLE_KEY)
+            key_name="${prefix}_ANON_KEY"
+            key=$(echo "$SECRETS_JSON" | jq -r --arg k "$key_name" '.[$k]')
+            
+            if [ "$key" = "null" ] || [ -z "$key" ]; then
+              key_name="${prefix}_PUBLISHABLE_KEY"
+              key=$(echo "$SECRETS_JSON" | jq -r --arg k "$key_name" '.[$k]')
+            fi
+            
+            ping_supabase "$url" "$key" "$prefix"
+          done
 
       - name: Update Heartbeat File (Prevent GitHub from disabling cron after 60 days)
         run: |
