@@ -16,11 +16,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ping Supabase REST API (Dynamic Hybrid Mode)
+      - name: Ping Supabase REST API (Ultra-Flexible Hybrid Mode)
         env:
           SECRETS_JSON: ${{ toJson(secrets) }}
         run: |
-          # Định nghĩa hàm ping lai (hybrid)
+          # 1. Định nghĩa hàm chuẩn hóa tên để ghép đôi (ví dụ: SELLER_URL và SELLER_ANON_KEY đều thành SELLER)
+          normalize_name() {
+            echo "$1" | tr '[:lower:]' '[:upper:]' \
+              | sed -E 's/_(URL|LINK|URI|HOST|ENDPOINT|API|KEY|ANON|TOKEN|SECRET|PUBLISHABLE|PASS|PASSWORD)_?//g' \
+              | sed -E 's/(URL|LINK|URI|HOST|ENDPOINT|API|KEY|ANON|TOKEN|SECRET|PUBLISHABLE|PASS|PASSWORD)//g' \
+              | tr -d '_-'
+          }
+
+          # 2. Định nghĩa hàm ping lai (hybrid)
           ping_supabase() {
             local url="$1"
             local key="$2"
@@ -54,31 +62,44 @@ jobs:
             fi
           }
 
-          # Tự động quét tất cả các dự án cấu hình trong Secrets
-          echo "Đang quét cấu hình các dự án..."
+          # 3. Phân loại và tự động ghép đôi các Secret bất kỳ
+          echo "Đang quét và tự động ghép đôi các Secret..."
           
-          # Đọc danh sách key kết thúc bằng _URL
-          url_keys=$(echo "$SECRETS_JSON" | jq -r 'keys[] | select(endswith("_URL"))')
+          # Đọc các URL (các secret có giá trị bắt đầu bằng http)
+          url_keys=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.value | startswith("http")) | .key')
           
           if [ -z "$url_keys" ]; then
-            echo "Không tìm thấy dự án nào kết thúc bằng _URL trong Secrets."
+            echo "Không tìm thấy bất kỳ cấu hình URL nào (giá trị bắt đầu bằng http) trong Secrets."
             exit 0
           fi
           
+          # Đọc các Key (các secret có giá trị không bắt đầu bằng http và không rỗng)
+          key_keys=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.value | startswith("http") | not) | select(.value != "") | .key')
+          
           for url_key in $url_keys; do
-            prefix="${url_key%_URL}"
-            url=$(echo "$SECRETS_JSON" | jq -r --arg k "$url_key" '.[$k]')
+            url_val=$(echo "$SECRETS_JSON" | jq -r --arg k "$url_key" '.[$k]')
+            norm_url=$(normalize_name "$url_key")
             
-            # Tìm key tương ứng (chấp nhận cả _ANON_KEY hoặc _PUBLISHABLE_KEY)
-            key_name="${prefix}_ANON_KEY"
-            key=$(echo "$SECRETS_JSON" | jq -r --arg k "$key_name" '.[$k]')
+            matched_key_name=""
+            matched_key_val=""
             
-            if [ "$key" = "null" ] || [ -z "$key" ]; then
-              key_name="${prefix}_PUBLISHABLE_KEY"
-              key=$(echo "$SECRETS_JSON" | jq -r --arg k "$key_name" '.[$k]')
+            # Tìm Key có tên chuẩn hóa trùng khớp với URL
+            for key_key in $key_keys; do
+              norm_key=$(normalize_name "$key_key")
+              if [ "$norm_url" = "$norm_key" ]; then
+                matched_key_name="$key_key"
+                matched_key_val=$(echo "$SECRETS_JSON" | jq -r --arg k "$key_key" '.[$k]')
+                break
+              fi
+            done
+            
+            if [ -n "$matched_key_val" ] && [ "$matched_key_val" != "null" ]; then
+              echo "Ghép đôi thành công: URL '$url_key' <-> Key '$matched_key_name' (Nhóm: $norm_url)"
+              ping_supabase "$url_val" "$matched_key_val" "$norm_url"
+            else
+              echo "[ERROR] Không tìm thấy Key phù hợp cho URL '$url_key'."
+              echo "        Mẹo đặt tên: Hãy đặt tên Key có phần chữ giống URL (Ví dụ: 'MYAPP_URL' và 'MYAPP_KEY' -> cùng có chữ 'MYAPP')."
             fi
-            
-            ping_supabase "$url" "$key" "$prefix"
           done
 
       - name: Update Heartbeat File (Prevent GitHub from disabling cron after 60 days)
