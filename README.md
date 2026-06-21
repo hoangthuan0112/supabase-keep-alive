@@ -1,28 +1,31 @@
 # Supabase Keep Alive Cron Job
 
-Repository độc lập chạy GitHub Actions định kỳ để giữ cho các dự án Supabase (Free Tier) không bị tự động tạm dừng (pause) do không hoạt động (inactivity).
+A standalone repository running scheduled GitHub Actions to prevent free-tier Supabase projects from automatically pausing due to inactivity.
 
-## Cách hoạt động
+## How It Works
 
-1. **Ping cơ sở dữ liệu:** Định kỳ mỗi 3 ngày (cấu hình trong `.github/workflows/keep-alive.yml`), GitHub Actions sẽ chạy một tiến trình gửi yêu cầu truy vấn REST API đến Supabase database.
-2. **Chống khoá Cron:** Tự động ghi đè ngày giờ hiện tại vào file `heartbeat.txt` và commit ngược lại repo. Điều này giúp repo luôn có hoạt động mới, ngăn GitHub tự động tắt lịch chạy `cron` sau 60 ngày.
+1. **Database Ping:** Every 3 days (configured in `.github/workflows/keep-alive.yml`), GitHub Actions triggers a workflow that sends REST API requests to your Supabase databases.
+2. **Prevent Cron Disabling:** Automatically writes the current timestamp to `heartbeat.txt` and commits the changes back to the repository. This keeps the repository active, preventing GitHub from automatically disabling scheduled `cron` workflows after 60 days of inactivity.
 
-## Hướng dẫn thiết lập
+## Setup Instructions
 
-### Bước 1: Thêm Secrets trên GitHub
-Để bảo mật thông tin và mã khoá dự án của bạn:
-1. Vào mục **Settings** (ở thanh menu phía trên của repository này).
-2. Chọn **Secrets and variables** > **Actions** từ menu bên trái.
-3. Chọn nút **New repository secret**.
-4. Thêm các cặp key tương ứng cho dự án của bạn:
-   - **`PROJECT_1_URL`**: Đường dẫn URL của dự án Supabase (Ví dụ: `https://xxxxxxxxxxxxxx.supabase.co`).
-   - **`PROJECT_1_ANON_KEY`**: Mã Anon Key (công khai) của dự án.
+### Step 1: Add Secrets on GitHub
+To keep your project credentials secure:
+1. Go to the **Settings** tab in your GitHub repository.
+2. Select **Secrets and variables** > **Actions** from the left sidebar.
+3. Click **New repository secret**.
+4. Add the corresponding keys for your project:
+   - **`[YOUR_PROJECT_NAME]_URL`**: The API URL of your Supabase project (e.g., `https://xxxxxxxxxxxxxx.supabase.co`).
+   - **`[YOUR_PROJECT_NAME]_ANON_KEY`**: The public `anon` key of your project.
 
-### Bước 2: Kích hoạt chạy thủ công (Tuỳ chọn để kiểm tra)
-1. Vào tab **Actions** của repository.
-2. Chọn workflow **Keep Supabase Alive**.
-3. Bấm nút **Run workflow** -> Chọn branch `main` và bấm nút chạy.
-4. Kiểm tra lịch sử log để đảm bảo kết nối trả về mã `200` (Success).
+> [!NOTE]
+> You can name the prefix anything you want (e.g., `SELLER_URL` & `SELLER_ANON_KEY`). The workflow will automatically normalize and pair them up as long as they share the same prefix (e.g. `SELLER`).
 
-### Bước 3: Thêm nhiều dự án khác (Nếu có)
-Nếu bạn có nhiều dự án Supabase khác nhau cần giữ hoạt động, hãy chỉnh sửa file `.github/workflows/keep-alive.yml`, sao chép phần `Ping Supabase REST API` và tạo thêm biến secrets (ví dụ: `PROJECT_2_URL`, `PROJECT_2_ANON_KEY`, ...).
+### Step 2: Trigger Manually (Optional for Testing)
+1. Go to the **Actions** tab of your repository.
+2. Select the **Keep Supabase Alive** workflow.
+3. Click **Run workflow** -> Select the `main` branch and click the button to run.
+4. Check the workflow logs to ensure the connection returns a `200` (Success) or `401` status.
+
+### Step 3: Manage Multiple Projects
+If you have multiple Supabase projects, you don't need to modify the code. Simply add more URL/Key pairs to GitHub Secrets following the same naming convention (e.g., `APP1_URL` & `APP1_ANON_KEY`, `APP2_URL` & `APP2_ANON_KEY`). The workflow will dynamically detect, pair, and ping all of them!
