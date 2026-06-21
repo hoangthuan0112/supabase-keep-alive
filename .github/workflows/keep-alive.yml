@@ -16,17 +16,47 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ping Supabase REST API
+      - name: Ping Supabase REST API (Hybrid Mode)
         run: |
-          echo "Pinging Supabase Projects..."
+          # Định nghĩa hàm ping lai (hybrid)
+          ping_supabase() {
+            local url="$1"
+            local key="$2"
+            local name="$3"
+            
+            if [ -z "$url" ] || [ -z "$key" ]; then
+              echo "Bỏ qua $name do chưa cấu hình URL hoặc Key."
+              return 0
+            fi
+            
+            echo "Đang kiểm tra $name..."
+            
+            # Cách 1: Truy vấn bảng profiles
+            local status
+            status=$(curl -s -o /dev/null -w "%{http_code}" -X GET "${url}/rest/v1/profiles?limit=1" \
+              -H "apikey: ${key}" \
+              -H "Authorization: Bearer ${key}")
+            
+            if [ "$status" = "200" ]; then
+              echo "  [OK] Cách 1 (bảng profiles) thành công! HTTP $status"
+            else
+              echo "  [WARNING] Cách 1 thất bại hoặc không có bảng profiles (HTTP $status)."
+              echo "  -> Đang chuyển sang Cách 2 (URL gốc)..."
+              
+              # Cách 2: Gọi vào URL gốc /rest/v1/ làm phương án dự phòng
+              status=$(curl -s -o /dev/null -w "%{http_code}" -X GET "${url}/rest/v1/" \
+                -H "apikey: ${key}" \
+                -H "Authorization: Bearer ${key}")
+              
+              echo "  [OK] Cách 2 hoàn thành với HTTP $status"
+            fi
+          }
           
-          # Dự án 1 (Seller App)
-          # Thêm secrets.PROJECT_1_URL và secrets.PROJECT_1_ANON_KEY vào Settings -> Secrets -> Actions của repo
-          curl -s -o /dev/null -w "Project 1 Status: %{http_code}\n" -X GET "${{ secrets.PROJECT_1_URL }}/rest/v1/profiles?limit=1" \
-            -H "apikey: ${{ secrets.PROJECT_1_ANON_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.PROJECT_1_ANON_KEY }}"
+          # Thực thi ping cho Dự án 1
+          ping_supabase "${{ secrets.PROJECT_1_URL }}" "${{ secrets.PROJECT_1_ANON_KEY }}" "Dự án 1 (Seller App)"
           
-          # Nếu bạn có thêm dự án khác, hãy sao chép dòng curl trên và thay bằng PROJECT_2_URL, PROJECT_2_ANON_KEY
+          # Bạn có thể nhân bản dòng dưới đây cho các dự án tiếp theo nếu cần:
+          # ping_supabase "${{ secrets.PROJECT_2_URL }}" "${{ secrets.PROJECT_2_ANON_KEY }}" "Dự án 2"
 
       - name: Update Heartbeat File (Prevent GitHub from disabling cron after 60 days)
         run: |
