@@ -4,7 +4,7 @@ A standalone repository running scheduled GitHub Actions to prevent free-tier Su
 
 ## How It Works
 
-1. **Database Ping:** Every 3 days (configured in `.github/workflows/keep-alive.yml`), GitHub Actions triggers a workflow that sends REST API requests to your Supabase databases.
+1. **Database Ping:** Every day (configured in `.github/workflows/keep-alive.yml`), GitHub Actions triggers a workflow that sends **multiple REST API queries** (table listing, SELECT query, HEAD request, Auth health check) to each of your Supabase databases to generate sufficient activity.
 2. **Prevent Cron Disabling:** Automatically writes the current timestamp to `heartbeat.txt` and commits the changes back to the repository. This keeps the repository active, preventing GitHub from automatically disabling scheduled `cron` workflows after 60 days of inactivity.
 
 ## Setup Instructions

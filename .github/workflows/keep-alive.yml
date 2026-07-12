@@ -2,8 +2,8 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # Chạy tự động lúc 00:00 UTC (07:00 sáng VN) mỗi 3 ngày
-    - cron: '0 0 */3 * *'
+    # Chạy tự động lúc 00:00 UTC (07:00 sáng VN) mỗi ngày
+    - cron: '0 0 * * *'
   workflow_dispatch: # Cho phép bấm chạy thủ công từ giao diện GitHub Action
 
 permissions:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ping Supabase REST API (Ultra-Flexible Hybrid Mode)
+      - name: Ping Supabase (Multi-Query Keep-Alive)
         env:
           SECRETS_JSON: ${{ toJson(secrets) }}
         run: |
@@ -28,61 +28,151 @@ jobs:
               | tr -d '_-'
           }
 
-          # 2. Định nghĩa hàm ping lai (hybrid)
+          # 2. Định nghĩa hàm ping đa tầng (multi-query)
           ping_supabase() {
             local url="$1"
             local key="$2"
             local name="$3"
-            
+            local success_count=0
+            local total_queries=0
+
             if [ -z "$url" ] || [ "$url" = "null" ] || [ -z "$key" ] || [ "$key" = "null" ]; then
-              echo "Bỏ qua $name do chưa cấu hình URL hoặc Key."
+              echo "⏭️  Bỏ qua $name do chưa cấu hình URL hoặc Key."
               return 0
             fi
-            
-            echo "Đang kiểm tra dự án: $name..."
-            
-            # Cách 1: Truy vấn bảng profiles
-            local status
-            status=$(curl -s -o /dev/null -w "%{http_code}" -X GET "${url}/rest/v1/profiles?limit=1" \
+
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔍 Đang kiểm tra dự án: $name"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # ── Query 1: Lấy danh sách bảng qua OpenAPI spec (tạo database query thực) ──
+            total_queries=$((total_queries + 1))
+            echo ""
+            echo "  📋 Query 1: Lấy danh sách bảng (OpenAPI)..."
+            local tables_response
+            tables_response=$(curl -s -X GET "${url}/rest/v1/" \
               -H "apikey: ${key}" \
               -H "Authorization: Bearer ${key}")
-            
-            if [ "$status" = "200" ]; then
-              echo "  [OK] Cách 1 (bảng profiles) thành công! HTTP $status"
+            local status=$?
+
+            # Trích xuất tên bảng đầu tiên từ OpenAPI response
+            local first_table=""
+            if [ $status -eq 0 ] && [ -n "$tables_response" ]; then
+              first_table=$(echo "$tables_response" | jq -r 'if type == "object" then (paths | select(length == 1) | .[0]) else empty end' 2>/dev/null | head -n 1)
+              if [ -n "$first_table" ] && [ "$first_table" != "null" ]; then
+                echo "     ✅ Thành công! Tìm thấy bảng: $first_table"
+                success_count=$((success_count + 1))
+              else
+                echo "     ⚠️  Response nhận được nhưng không trích xuất được tên bảng."
+              fi
             else
-              echo "  [WARNING] Cách 1 thất bại hoặc không có bảng profiles (HTTP $status)."
-              echo "  -> Đang chuyển sang Cách 2 (URL gốc)..."
-              
-              # Cách 2: Gọi vào URL gốc /rest/v1/ làm phương án dự phòng
-              status=$(curl -s -o /dev/null -w "%{http_code}" -X GET "${url}/rest/v1/" \
-                -H "apikey: ${key}" \
-                -H "Authorization: Bearer ${key}")
-              
-              echo "  [OK] Cách 2 hoàn thành với HTTP $status"
+              echo "     ❌ Thất bại (curl exit code: $status)"
+            fi
+
+            # ── Query 2: Truy vấn SELECT thực sự vào một bảng ──
+            total_queries=$((total_queries + 1))
+            echo ""
+            echo "  🔎 Query 2: SELECT truy vấn bảng dữ liệu..."
+
+            # Ưu tiên bảng profiles, nếu không có thì dùng bảng đầu tiên tìm được
+            local query_table="${first_table:-profiles}"
+            local select_status
+            select_status=$(curl -s -o /dev/null -w "%{http_code}" -X GET \
+              "${url}/rest/v1/${query_table}?select=*&limit=1" \
+              -H "apikey: ${key}" \
+              -H "Authorization: Bearer ${key}" \
+              -H "Accept: application/json")
+
+            if [ "$select_status" = "200" ]; then
+              echo "     ✅ SELECT từ bảng '${query_table}' thành công! HTTP $select_status"
+              success_count=$((success_count + 1))
+            elif [ "$select_status" = "406" ] || [ "$select_status" = "404" ]; then
+              echo "     ⚠️  Bảng '${query_table}' không tồn tại (HTTP $select_status). Thử bảng khác..."
+              # Thử fallback: query bảng profiles nếu chưa thử, hoặc bất kỳ bảng nào
+              if [ "$query_table" != "profiles" ]; then
+                select_status=$(curl -s -o /dev/null -w "%{http_code}" -X GET \
+                  "${url}/rest/v1/profiles?select=*&limit=1" \
+                  -H "apikey: ${key}" \
+                  -H "Authorization: Bearer ${key}" \
+                  -H "Accept: application/json")
+                if [ "$select_status" = "200" ]; then
+                  echo "     ✅ Fallback SELECT từ 'profiles' thành công! HTTP $select_status"
+                  success_count=$((success_count + 1))
+                else
+                  echo "     ⚠️  Fallback cũng thất bại (HTTP $select_status)"
+                fi
+              fi
+            else
+              echo "     ⚠️  SELECT trả về HTTP $select_status"
+            fi
+
+            # ── Query 3: HEAD request để kích hoạt connection pool ──
+            total_queries=$((total_queries + 1))
+            echo ""
+            echo "  🏓 Query 3: HEAD request kiểm tra connection..."
+            local head_status
+            head_status=$(curl -s -o /dev/null -w "%{http_code}" -X HEAD \
+              "${url}/rest/v1/${query_table}" \
+              -H "apikey: ${key}" \
+              -H "Authorization: Bearer ${key}")
+            if [ "$head_status" = "200" ]; then
+              echo "     ✅ HEAD request thành công! HTTP $head_status"
+              success_count=$((success_count + 1))
+            else
+              echo "     ⚠️  HEAD request trả về HTTP $head_status"
+            fi
+
+            # ── Query 4: Auth health check (kích hoạt GoTrue → database) ──
+            total_queries=$((total_queries + 1))
+            echo ""
+            echo "  🔐 Query 4: Auth health check..."
+            local auth_status
+            auth_status=$(curl -s -o /dev/null -w "%{http_code}" -X GET \
+              "${url}/auth/v1/health" \
+              -H "apikey: ${key}")
+            if [ "$auth_status" = "200" ]; then
+              echo "     ✅ Auth service healthy! HTTP $auth_status"
+              success_count=$((success_count + 1))
+            else
+              echo "     ⚠️  Auth health check trả về HTTP $auth_status"
+            fi
+
+            # ── Tổng kết ──
+            echo ""
+            echo "  📊 Kết quả: $success_count/$total_queries queries thành công"
+            if [ $success_count -eq 0 ]; then
+              echo "  🔴 CẢNH BÁO: Không có query nào thành công! Kiểm tra lại URL và Key."
+            elif [ $success_count -lt $total_queries ]; then
+              echo "  🟡 Một số query thất bại nhưng project vẫn được ping."
+            else
+              echo "  🟢 Tất cả queries thành công!"
             fi
           }
 
           # 3. Phân loại và tự động ghép đôi các Secret bất kỳ
-          echo "Đang quét và tự động ghép đôi các Secret..."
-          
+          echo "🚀 Bắt đầu quét và ghép đôi Secrets..."
+          echo ""
+
           # Đọc các URL (các secret có giá trị bắt đầu bằng http)
           url_keys=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.value | startswith("http")) | .key')
-          
+
           if [ -z "$url_keys" ]; then
-            echo "Không tìm thấy bất kỳ cấu hình URL nào (giá trị bắt đầu bằng http) trong Secrets."
+            echo "❌ Không tìm thấy bất kỳ cấu hình URL nào (giá trị bắt đầu bằng http) trong Secrets."
             exit 0
           fi
-          
+
           # Đọc các Key (các secret có giá trị không bắt đầu bằng http và không rỗng)
           key_keys=$(echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.value | startswith("http") | not) | select(.value != "") | .key')
-          
+
+          matched_count=0
           for url_key in $url_keys; do
             url_val=$(echo "$SECRETS_JSON" | jq -r --arg k "$url_key" '.[$k]')
             norm_url=$(normalize_name "$url_key")
-            
+
             matched_key_name=""
             matched_key_val=""
-            
+
             # Tìm Key có tên chuẩn hóa trùng khớp với URL
             for key_key in $key_keys; do
               norm_key=$(normalize_name "$key_key")
@@ -92,15 +182,21 @@ jobs:
                 break
               fi
             done
-            
+
             if [ -n "$matched_key_val" ] && [ "$matched_key_val" != "null" ]; then
-              echo "Ghép đôi thành công: URL '$url_key' <-> Key '$matched_key_name' (Nhóm: $norm_url)"
+              matched_count=$((matched_count + 1))
+              echo "🔗 Ghép đôi #$matched_count: '$url_key' ↔ '$matched_key_name' (Nhóm: $norm_url)"
               ping_supabase "$url_val" "$matched_key_val" "$norm_url"
             else
-              echo "[ERROR] Không tìm thấy Key phù hợp cho URL '$url_key'."
-              echo "        Mẹo đặt tên: Hãy đặt tên Key có phần chữ giống URL (Ví dụ: 'MYAPP_URL' và 'MYAPP_KEY' -> cùng có chữ 'MYAPP')."
+              echo "❌ Không tìm thấy Key phù hợp cho URL '$url_key'."
+              echo "   💡 Mẹo: Đặt tên Key cùng prefix với URL (VD: 'MYAPP_URL' và 'MYAPP_KEY')."
             fi
           done
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Hoàn tất! Đã ping $matched_count project(s)."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Update Heartbeat File (Prevent GitHub from disabling cron after 60 days)
         run: |
