@@ -1,31 +1,12 @@
-# Supabase Keep Alive Cron Job
+# Supabase Keep Alive
 
-A standalone repository running scheduled GitHub Actions to prevent free-tier Supabase projects from automatically pausing due to inactivity.
+A GitHub Actions workflow queries a dedicated table in each Supabase project every day at 00:00 UTC (07:00 Vietnam time). It fails if a project cannot return the expected row. Free projects may still be paused: Supabase does not guarantee that periodic requests prevent inactivity pauses.
 
-## How It Works
+## Setup
 
-1. **Database Ping:** Every day (configured in `.github/workflows/keep-alive.yml`), GitHub Actions triggers a workflow that sends **multiple REST API queries** (table listing, SELECT query, HEAD request, Auth health check) to each of your Supabase databases to generate sufficient activity.
-2. **Prevent Cron Disabling:** Automatically writes the current timestamp to `heartbeat.txt` and commits the changes back to the repository. This keeps the repository active, preventing GitHub from automatically disabling scheduled `cron` workflows after 60 days of inactivity.
+1. Restore each paused project in the Supabase dashboard.
+2. Run [supabase/keep_alive.sql](supabase/keep_alive.sql) in the SQL Editor of **each** project. It creates a single public-readable row with no application data. The `public` schema must be exposed through the Data API. Review the script before running it, especially if a table named `keep_alive` already exists.
+3. In GitHub repository **Settings → Secrets and variables → Actions**, add a URL and anonymous or publishable API key for each project, such as `SELLER_URL` and `SELLER_ANON_KEY`. Use matching prefixes. Do not use a service-role or secret key.
+4. Enable **Keep Supabase Alive** under GitHub Actions, choose **Run workflow**, and verify that every project reports a successful database query. Configure GitHub notifications for failed workflows.
 
-## Setup Instructions
-
-### Step 1: Add Secrets on GitHub
-To keep your project credentials secure:
-1. Go to the **Settings** tab in your GitHub repository.
-2. Select **Secrets and variables** > **Actions** from the left sidebar.
-3. Click **New repository secret**.
-4. Add the corresponding keys for your project:
-   - **`[YOUR_PROJECT_NAME]_URL`**: The API URL of your Supabase project (e.g., `https://xxxxxxxxxxxxxx.supabase.co`).
-   - **`[YOUR_PROJECT_NAME]_ANON_KEY`**: The public `anon` key of your project.
-
-> [!NOTE]
-> You can name the prefix anything you want (e.g., `SELLER_URL` & `SELLER_ANON_KEY`). The workflow will automatically normalize and pair them up as long as they share the same prefix (e.g. `SELLER`).
-
-### Step 2: Trigger Manually (Optional for Testing)
-1. Go to the **Actions** tab of your repository.
-2. Select the **Keep Supabase Alive** workflow.
-3. Click **Run workflow** -> Select the `main` branch and click the button to run.
-4. Check the workflow logs to ensure the connection returns a `200` (Success) or `401` status.
-
-### Step 3: Manage Multiple Projects
-If you have multiple Supabase projects, you don't need to modify the code. Simply add more URL/Key pairs to GitHub Secrets following the same naming convention (e.g., `APP1_URL` & `APP1_ANON_KEY`, `APP2_URL` & `APP2_ANON_KEY`). The workflow will dynamically detect, pair, and ping all of them!
+The workflow discovers secret pairs automatically. It updates `heartbeat.txt` after a successful run. Scheduled runs can be delayed or disabled by GitHub, so check their history periodically. A paused Supabase project must be restored manually before it can answer requests.
